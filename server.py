@@ -3,22 +3,16 @@
 Marcela — Claude-powered WhatsApp AI Agent for Norfolk AI
 Vercel Serverless Function entry point.
 
-Behavior:
-- Direct messages (1-on-1): Marcela responds to every message.
-- Group chats: Marcela responds when:
-    a) Mentioned naturally: "Marcela, ...", "@Marcela ...", "Hey Marcela ..."
-    b) Slash commands: /ask, /quick, /translate
-  She stays completely silent on all other group messages.
+Uses direct HTTP requests to Anthropic API to avoid SDK/httpx version conflicts.
 """
 
 import os
 import re
+import json
 import logging
 from collections import defaultdict, deque
 from flask import Flask, request, Response
-from twilio.rest import Client as TwilioClient
-from twilio.twiml.messaging_response import MessagingResponse
-import anthropic
+import requests as http_requests
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -27,38 +21,34 @@ TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "AC2354928595411f3e415
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "ac4b34ffb919ad877d9f70dd6d88b7ab")
 WHATSAPP_SENDER = os.environ.get("WHATSAPP_SENDER", "whatsapp:+19109944861")
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
+ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 
 MAX_HISTORY = 20
 
 # ---------------------------------------------------------------------------
 # Trigger detection
 # ---------------------------------------------------------------------------
-
-# Natural mention patterns (case-insensitive)
 MENTION_PATTERNS = [
-    r"@marcela\b",           # @Marcela
-    r"\bmarcela[,:\s]",      # Marcela, ... / Marcela: ...
-    r"\bhey\s+marcela\b",    # Hey Marcela
-    r"\bhi\s+marcela\b",     # Hi Marcela
-    r"\bmarcela\b.*\?",      # Marcela ... ? (question)
+    r"@marcela\b",
+    r"\bmarcela[,:\s]",
+    r"\bhey\s+marcela\b",
+    r"\bhi\s+marcela\b",
+    r"\bmarcela\b.*\?",
 ]
 MENTION_REGEX = re.compile("|".join(MENTION_PATTERNS), re.IGNORECASE)
 
-# Slash command patterns
 SLASH_ASK_REGEX = re.compile(r"^/ask\s+", re.IGNORECASE)
 SLASH_QUICK_REGEX = re.compile(r"^/quick\s+", re.IGNORECASE)
 SLASH_TRANSLATE_REGEX = re.compile(r"^/translate\s+", re.IGNORECASE)
 
-# Strip mention from message before sending to Claude
 STRIP_MENTION_REGEX = re.compile(r"@?marcela[,:\s]*", re.IGNORECASE)
 STRIP_HEY_HI_REGEX = re.compile(r"^(hey|hi)\s+marcela[,:\s]*", re.IGNORECASE)
 
 # ---------------------------------------------------------------------------
 # System prompts
 # ---------------------------------------------------------------------------
-
 MARCELA_SYSTEM_PROMPT = """You are Marcela, an intelligent AI assistant who works for Norfolk AI.
 
 Your personality:
@@ -116,24 +106,6 @@ logging.basicConfig(
 logger = logging.getLogger("marcela")
 
 # ---------------------------------------------------------------------------
-# Clients (lazy-initialized to avoid import-time crashes on serverless)
-# ---------------------------------------------------------------------------
-_twilio_client = None
-_claude_client = None
-
-def get_twilio_client():
-    global _twilio_client
-    if _twilio_client is None:
-        _twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    return _twilio_client
-
-def get_claude_client():
-    global _claude_client
-    if _claude_client is None:
-        _claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    return _claude_client
-
-# ---------------------------------------------------------------------------
 # Conversation history (in-memory; resets on cold start)
 # ---------------------------------------------------------------------------
 conversation_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=MAX_HISTORY))
@@ -147,17 +119,10 @@ app = Flask(__name__)
 # ---------------------------------------------------------------------------
 # Trigger & command parsing
 # ---------------------------------------------------------------------------
-
 def detect_trigger(body: str, is_group: bool):
-    """
-    Returns a tuple: (should_respond: bool, mode: str, cleaned_body: str)
-    Modes: "normal", "quick", "translate"
-    """
-    # Direct messages always respond normally
     if not is_group:
         return True, "normal", body
 
-    # Check slash commands first (highest priority)
     if SLASH_QUICK_REGEX.match(body):
         cleaned = SLASH_QUICK_REGEX.sub("", body).strip()
         return True, "quick", cleaned
@@ -170,19 +135,15 @@ def detect_trigger(body: str, is_group: bool):
         cleaned = SLASH_ASK_REGEX.sub("", body).strip()
         return True, "normal", cleaned
 
-    # Check natural mentions
     if MENTION_REGEX.search(body):
-        # Strip the mention from the message
         cleaned = STRIP_HEY_HI_REGEX.sub("", body)
         cleaned = STRIP_MENTION_REGEX.sub("", cleaned).strip()
         return True, "normal", cleaned if cleaned else body
 
-    # No trigger found — stay silent
     return False, None, body
 
 
 def get_system_prompt(mode: str) -> str:
-    """Return the appropriate system prompt based on the command mode."""
     if mode == "quick":
         return QUICK_SYSTEM_PROMPT
     elif mode == "translate":
@@ -191,15 +152,35 @@ def get_system_prompt(mode: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Claude interaction
+# Claude interaction (direct HTTP, no SDK)
 # ---------------------------------------------------------------------------
+def call_claude(system_prompt: str, messages: list) -> str:
+    """Call Claude API directly via HTTP requests."""
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    payload = {
+        "model": CLAUDE_MODEL,
+        "max_tokens": 1024,
+        "system": system_prompt,
+        "messages": messages,
+    }
+    try:
+        resp = http_requests.post(ANTHROPIC_API_URL, headers=headers, json=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["content"][0]["text"]
+    except Exception as e:
+        logger.error(f"Claude API error: {e}")
+        return "I'm sorry, I'm having a brief technical issue. Please try again in a moment."
+
 
 def get_claude_response(conversation_id: str, user_message: str, mode: str = "normal",
                         sender_name: str = "", is_group: bool = False) -> str:
-    """Send the user message (with history) to Claude and return the response."""
     history = conversation_history[conversation_id]
 
-    # In group chats, prefix with sender name for context
     if is_group and sender_name:
         content = f"[{sender_name}]: {user_message}"
     else:
@@ -207,37 +188,23 @@ def get_claude_response(conversation_id: str, user_message: str, mode: str = "no
 
     history.append({"role": "user", "content": content})
 
-    # For /quick and /translate, use only the current message (no history)
     if mode in ("quick", "translate"):
         messages_for_claude = [{"role": "user", "content": user_message}]
     else:
         messages_for_claude = list(history)
 
     system_prompt = get_system_prompt(mode)
+    assistant_text = call_claude(system_prompt, messages_for_claude)
 
-    try:
-        response = get_claude_client().messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=1024,
-            system=system_prompt,
-            messages=messages_for_claude,
-        )
-        assistant_text = response.content[0].text
-        history.append({"role": "assistant", "content": assistant_text})
-        return assistant_text
-    except Exception as e:
-        logger.error(f"Claude API error: {e}")
-        if history and history[-1]["role"] == "user":
-            history.pop()
-        return "I'm sorry, I'm having a brief technical issue. Please try again in a moment."
+    history.append({"role": "assistant", "content": assistant_text})
+    return assistant_text
 
 
 # ---------------------------------------------------------------------------
-# Twilio messaging
+# Twilio messaging (direct HTTP, no SDK)
 # ---------------------------------------------------------------------------
-
 def send_whatsapp_message(to: str, body: str):
-    """Send a WhatsApp message via Twilio, splitting long messages."""
+    """Send a WhatsApp message via Twilio REST API directly."""
     max_len = 1500
     chunks = []
     while len(body) > max_len:
@@ -248,30 +215,39 @@ def send_whatsapp_message(to: str, body: str):
         body = body[split_at:].lstrip("\n")
     chunks.append(body)
 
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
+
     for chunk in chunks:
         try:
-            msg = get_twilio_client().messages.create(
-                from_=WHATSAPP_SENDER,
-                to=to,
-                body=chunk,
+            resp = http_requests.post(
+                url,
+                auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+                data={"From": WHATSAPP_SENDER, "To": to, "Body": chunk},
+                timeout=15,
             )
-            logger.info(f"Sent message to {to}: SID={msg.sid}")
+            data = resp.json()
+            logger.info(f"Sent message to {to}: SID={data.get('sid', 'unknown')}")
         except Exception as e:
             logger.error(f"Twilio send error: {e}")
 
 
 # ---------------------------------------------------------------------------
+# TwiML helper
+# ---------------------------------------------------------------------------
+def empty_twiml():
+    return Response('<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+                    content_type="text/xml")
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    """Handle incoming WhatsApp messages from Twilio."""
     sender = request.form.get("From", "")
     body = request.form.get("Body", "").strip()
     profile_name = request.form.get("ProfileName", "Unknown")
 
-    # Detect group messages via Twilio's NumParticipants field
     num_participants = request.form.get("NumParticipants", None)
     is_group = num_participants is not None
 
@@ -281,21 +257,18 @@ def webhook():
     )
 
     if not body:
-        return Response(str(MessagingResponse()), content_type="text/xml")
+        return empty_twiml()
 
-    # Determine if Marcela should respond and in what mode
     should_respond, mode, cleaned_body = detect_trigger(body, is_group)
 
     if not should_respond:
         logger.info(f"Skipping group message (no trigger): {body[:50]}")
-        return Response(str(MessagingResponse()), content_type="text/xml")
+        return empty_twiml()
 
     logger.info(f"Responding in '{mode}' mode to: {cleaned_body[:80]}")
 
-    # Conversation ID: group vs direct
     conversation_id = f"group:{sender}" if is_group else sender
 
-    # Get Claude's response
     assistant_reply = get_claude_response(
         conversation_id=conversation_id,
         user_message=cleaned_body,
@@ -304,28 +277,20 @@ def webhook():
         is_group=is_group,
     )
 
-    # Send response back
     send_whatsapp_message(sender, assistant_reply)
-
-    # Return empty TwiML so Twilio doesn't send a duplicate
-    return Response(str(MessagingResponse()), content_type="text/xml")
+    return empty_twiml()
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    """Health check endpoint."""
     return {"status": "ok", "agent": "Marcela", "org": "Norfolk AI"}
 
 
 @app.route("/", methods=["GET"])
 def index():
-    """Root endpoint."""
     return {"message": "Marcela — Norfolk AI WhatsApp Assistant", "status": "running"}
 
 
-# ---------------------------------------------------------------------------
-# Entry point (for local development)
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     logger.info("Starting Marcela webhook server on port 5005...")
     app.run(host="0.0.0.0", port=5005, debug=False)
