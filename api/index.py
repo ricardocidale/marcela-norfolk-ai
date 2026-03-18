@@ -256,6 +256,14 @@ def empty_twiml():
                     content_type="text/xml")
 
 
+def message_twiml(body: str):
+    """Return TwiML with an inline message response."""
+    import xml.sax.saxutils as saxutils
+    escaped = saxutils.escape(body)
+    twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{escaped}</Message></Response>'
+    return Response(twiml, content_type="text/xml")
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -294,8 +302,12 @@ def webhook():
         is_group=is_group,
     )
 
-    send_whatsapp_message(sender, assistant_reply)
-    return empty_twiml()
+    # Respond inline via TwiML (most reliable, avoids 24-hour window issues)
+    # Truncate to ~1500 chars for WhatsApp message limit
+    if len(assistant_reply) > 1500:
+        assistant_reply = assistant_reply[:1497] + "..."
+    logger.info(f"Responding with TwiML message: {assistant_reply[:80]}")
+    return message_twiml(assistant_reply)
 
 
 @app.route("/health", methods=["GET"])
