@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
 Marcela — Claude-powered WhatsApp AI Agent for Norfolk AI
-Webhook server that receives Twilio WhatsApp messages, processes them with Claude,
-and sends responses back via Twilio.
+Vercel Serverless Function entry point.
 """
 
 import os
-import time
 import logging
 from collections import defaultdict, deque
 from flask import Flask, request, Response
@@ -17,10 +15,9 @@ import anthropic
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-TWILIO_ACCOUNT_SID = "AC2354928595411f3e4156a44683af210d"
-TWILIO_AUTH_TOKEN = "ac4b34ffb919ad877d9f70dd6d88b7ab"
-WHATSAPP_SENDER = "whatsapp:+19109944861"
-RICARDO_NUMBER = "whatsapp:+15126699705"
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "AC2354928595411f3e4156a44683af210d")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "ac4b34ffb919ad877d9f70dd6d88b7ab")
+WHATSAPP_SENDER = os.environ.get("WHATSAPP_SENDER", "whatsapp:+19109944861")
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 CLAUDE_MODEL = "claude-sonnet-4-20250514"
@@ -71,6 +68,8 @@ claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 # ---------------------------------------------------------------------------
 # Conversation history store  (in-memory, keyed by sender phone number)
+# Note: In serverless, this resets between cold starts. For persistence,
+# consider using a database.
 # ---------------------------------------------------------------------------
 conversation_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=MAX_HISTORY))
 
@@ -99,15 +98,13 @@ def get_claude_response(sender: str, user_message: str) -> str:
         return assistant_text
     except Exception as e:
         logger.error(f"Claude API error: {e}")
-        # Remove the user message we just added so history stays clean
         if history and history[-1]["role"] == "user":
             history.pop()
-        return "I'm sorry, I'm having a brief technical issue. Please try again in a moment. 🙏"
+        return "I'm sorry, I'm having a brief technical issue. Please try again in a moment."
 
 
 def send_whatsapp_message(to: str, body: str):
     """Send a WhatsApp message via Twilio."""
-    # Twilio WhatsApp has a 1600 char limit per message; split if needed
     max_len = 1500
     chunks = []
     while len(body) > max_len:
@@ -142,13 +139,9 @@ def webhook():
     if not body:
         return Response(str(MessagingResponse()), content_type="text/xml")
 
-    # Get Claude's response
     assistant_reply = get_claude_response(sender, body)
-
-    # Send response back via Twilio REST API (more reliable than TwiML for long messages)
     send_whatsapp_message(sender, assistant_reply)
 
-    # Return empty TwiML so Twilio doesn't send a duplicate
     return Response(str(MessagingResponse()), content_type="text/xml")
 
 
@@ -165,7 +158,7 @@ def index():
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Entry point (for local development)
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     logger.info("Starting Marcela webhook server on port 5005...")
