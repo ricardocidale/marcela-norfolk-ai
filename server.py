@@ -116,10 +116,22 @@ logging.basicConfig(
 logger = logging.getLogger("marcela")
 
 # ---------------------------------------------------------------------------
-# Clients
+# Clients (lazy-initialized to avoid import-time crashes on serverless)
 # ---------------------------------------------------------------------------
-twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+_twilio_client = None
+_claude_client = None
+
+def get_twilio_client():
+    global _twilio_client
+    if _twilio_client is None:
+        _twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    return _twilio_client
+
+def get_claude_client():
+    global _claude_client
+    if _claude_client is None:
+        _claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    return _claude_client
 
 # ---------------------------------------------------------------------------
 # Conversation history (in-memory; resets on cold start)
@@ -204,7 +216,7 @@ def get_claude_response(conversation_id: str, user_message: str, mode: str = "no
     system_prompt = get_system_prompt(mode)
 
     try:
-        response = claude_client.messages.create(
+        response = get_claude_client().messages.create(
             model=CLAUDE_MODEL,
             max_tokens=1024,
             system=system_prompt,
@@ -238,7 +250,7 @@ def send_whatsapp_message(to: str, body: str):
 
     for chunk in chunks:
         try:
-            msg = twilio_client.messages.create(
+            msg = get_twilio_client().messages.create(
                 from_=WHATSAPP_SENDER,
                 to=to,
                 body=chunk,
