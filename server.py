@@ -19,7 +19,7 @@ import anthropic
 # ---------------------------------------------------------------------------
 TWILIO_ACCOUNT_SID = "AC2354928595411f3e4156a44683af210d"
 TWILIO_AUTH_TOKEN = "ac4b34ffb919ad877d9f70dd6d88b7ab"
-WHATSAPP_SENDER = "whatsapp:+15559178507"
+WHATSAPP_SENDER = "whatsapp:+15126699705"
 RICARDO_NUMBER = "whatsapp:+15126699705"
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
