@@ -359,18 +359,23 @@ async def handle_transfer(websocket: WebSocket, session_id):
 async def voice_incoming(request: Request):
     """Handle incoming voice calls — return TwiML to connect to ConversationRelay."""
     try:
-        form = await request.form()
-        caller = form.get("From", "unknown")
-        called = form.get("To", "unknown")
-    except Exception:
-        # Fallback: parse query params or body manually
-        body = await request.body()
-        from urllib.parse import parse_qs
-        params = parse_qs(body.decode("utf-8", errors="ignore"))
-        caller = params.get("From", ["unknown"])[0]
-        called = params.get("To", ["unknown"])[0]
+        # Try form parsing first
+        try:
+            form = await request.form()
+            caller = form.get("From", "unknown")
+            called = form.get("To", "unknown")
+        except Exception as form_err:
+            logger.warning(f"Form parse failed ({form_err}), falling back to body parse")
+            body = await request.body()
+            from urllib.parse import parse_qs
+            params = parse_qs(body.decode("utf-8", errors="ignore"))
+            caller = params.get("From", ["unknown"])[0]
+            called = params.get("To", ["unknown"])[0]
 
-    logger.info(f"Incoming call from {caller} to {called}")
+        logger.info(f"Incoming call from {caller} to {called}")
+    except Exception as outer_err:
+        logger.error(f"voice_incoming outer error: {outer_err}", exc_info=True)
+        return Response(f"Error: {outer_err}", status_code=500)
 
     # Build WebSocket URL from the same host (single-port architecture)
     if PUBLIC_URL:
