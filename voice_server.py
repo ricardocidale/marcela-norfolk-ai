@@ -5,7 +5,7 @@ Marcela Voice AI Agent — Norfolk AI
 Ultra-low-latency voice agent using:
   - Twilio ConversationRelay (Deepgram nova-3 STT + ElevenLabs Flash 2.5 TTS)
   - Google Gemini 2.5 Flash (streaming) for conversational AI
-  - WebSocket server for real-time bidirectional communication
+  - Single-port server: HTTP + WebSocket on the same port (Railway/Render compatible)
   - Automatic multilingual detection (EN, PT-BR, ES, IT + any language)
 
 Architecture:
@@ -17,13 +17,17 @@ Powered by Norfolk AI
 
 import os
 import json
-import asyncio
 import logging
 import time
+import xml.sax.saxutils as saxutils
 from collections import defaultdict, deque
-from datetime import datetime
 
-from flask import Flask, request, Response
+from starlette.applications import Starlette
+from starlette.routing import Route, WebSocketRoute
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.websockets import WebSocket, WebSocketDisconnect
+import uvicorn
 from google import genai
 
 # ---------------------------------------------------------------------------
@@ -41,13 +45,15 @@ VOICE_STABILITY = 0.55   # More expressive/dynamic
 VOICE_SIMILARITY = 0.80  # Good fidelity
 VOICE_CONFIG = f"{ELEVENLABS_VOICE_ID}-{VOICE_SPEED}_{VOICE_STABILITY}_{VOICE_SIMILARITY}"
 
-# Server
-WS_PORT = 8765
-HTTP_PORT = 5005
+# Server — single port for both HTTP and WebSocket
+PORT = int(os.environ.get("PORT", 5005))
 MAX_HISTORY = 20
 RICARDO_NUMBER = "+15126699705"
 WHATSAPP_NUMBER = "+15559178507"
 VOICE_NUMBER = "+19109944861"
+
+# Public URL (set via environment variable in production)
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "")
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -55,10 +61,6 @@ VOICE_NUMBER = "+19109944861"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("/home/ubuntu/marcela/voice_server.log"),
-    ],
 )
 logger = logging.getLogger("marcela-voice")
 
@@ -156,13 +158,14 @@ conversation_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=MAX_HI
 # ---------------------------------------------------------------------------
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ---------------------------------------------------------------------------
-# WebSocket Handler
-# ---------------------------------------------------------------------------
-import websockets
 
-async def handle_websocket(websocket):
+# ---------------------------------------------------------------------------
+# WebSocket Handler for ConversationRelay
+# ---------------------------------------------------------------------------
+async def websocket_handler(websocket: WebSocket):
     """Handle a ConversationRelay WebSocket connection."""
+    await websocket.accept()
+
     session_id = None
     call_sid = None
     caller_number = None
@@ -171,7 +174,9 @@ async def handle_websocket(websocket):
     logger.info("New WebSocket connection established")
 
     try:
-        async for raw_message in websocket:
+        while True:
+            raw_message = await websocket.receive_text()
+
             try:
                 message = json.loads(raw_message)
             except json.JSONDecodeError:
@@ -186,7 +191,6 @@ async def handle_websocket(websocket):
                 call_sid = message.get("callSid", "unknown")
                 caller_number = message.get("from", "unknown")
                 direction = message.get("direction", "unknown")
-                custom_params = message.get("customParameters", {})
 
                 logger.info(
                     f"Call setup: session={session_id}, callSid={call_sid}, "
@@ -197,7 +201,6 @@ async def handle_websocket(websocket):
             elif msg_type == "prompt":
                 voice_prompt = message.get("voicePrompt", "")
                 lang = message.get("lang", "en")
-                is_last = message.get("last", True)
 
                 if not voice_prompt.strip():
                     continue
@@ -207,7 +210,6 @@ async def handle_websocket(websocket):
                     f"{voice_prompt[:100]}"
                 )
 
-                # Process with Gemini and stream response back
                 await process_and_respond(
                     websocket, session_id, caller_number, voice_prompt, lang
                 )
@@ -226,7 +228,6 @@ async def handle_websocket(websocket):
                 digit = message.get("digit", "")
                 logger.info(f"[{session_id}] DTMF digit pressed: {digit}")
 
-                # Handle transfer request via DTMF (press 1 to transfer)
                 if digit == "1":
                     await handle_transfer(websocket, session_id)
 
@@ -238,25 +239,21 @@ async def handle_websocket(websocket):
             else:
                 logger.warning(f"[{session_id}] Unknown message type: {msg_type}")
 
-    except websockets.exceptions.ConnectionClosed as e:
+    except WebSocketDisconnect:
         duration = time.time() - session_start
         logger.info(
-            f"WebSocket closed for session {session_id}: code={e.code}, "
-            f"reason={e.reason}, duration={duration:.1f}s"
+            f"WebSocket closed for session {session_id}: duration={duration:.1f}s"
         )
     except Exception as e:
         logger.error(f"WebSocket error for session {session_id}: {e}", exc_info=True)
 
 
-async def process_and_respond(websocket, session_id, caller_number, user_text, lang):
+async def process_and_respond(websocket: WebSocket, session_id, caller_number, user_text, lang):
     """Process caller speech through Gemini 2.5 Flash (streaming) and stream tokens back."""
     conversation_id = f"voice:{caller_number or session_id}"
     history = conversation_history[conversation_id]
 
-    # Add user message to history
     history.append({"role": "user", "parts": [{"text": user_text}]})
-
-    # Build messages for Gemini
     gemini_contents = list(history)
 
     start_time = time.time()
@@ -265,7 +262,6 @@ async def process_and_respond(websocket, session_id, caller_number, user_text, l
     full_response = ""
 
     try:
-        # Use Gemini streaming for lowest latency
         response = gemini_client.models.generate_content_stream(
             model=GEMINI_MODEL,
             contents=gemini_contents,
@@ -276,7 +272,6 @@ async def process_and_respond(websocket, session_id, caller_number, user_text, l
             ),
         )
 
-        # Stream tokens back to ConversationRelay as they arrive
         buffer = ""
         for chunk in response:
             if chunk.text:
@@ -286,62 +281,41 @@ async def process_and_respond(websocket, session_id, caller_number, user_text, l
                 if first_token_time is None:
                     first_token_time = time.time()
                     ttft = (first_token_time - start_time) * 1000
-                    logger.info(
-                        f"[{session_id}] First token in {ttft:.0f}ms"
-                    )
+                    logger.info(f"[{session_id}] First token in {ttft:.0f}ms")
 
-                # Send tokens in sentence-sized chunks for natural speech
-                # Look for sentence boundaries to send natural-sounding chunks
+                # Send tokens at sentence boundaries for natural speech
                 while True:
-                    # Find sentence boundary
                     boundary = -1
                     for delim in [". ", "! ", "? ", ".\n", "!\n", "?\n"]:
                         pos = buffer.find(delim)
                         if pos != -1 and (boundary == -1 or pos < boundary):
                             boundary = pos + len(delim)
 
-                    if boundary == -1:
-                        # Also check for comma pauses in longer buffers
-                        if len(buffer) > 80:
-                            comma_pos = buffer.find(", ")
-                            if comma_pos != -1 and comma_pos > 20:
-                                boundary = comma_pos + 2
+                    if boundary == -1 and len(buffer) > 80:
+                        comma_pos = buffer.find(", ")
+                        if comma_pos != -1 and comma_pos > 20:
+                            boundary = comma_pos + 2
 
                     if boundary == -1:
                         break
 
-                    # Send the chunk
                     chunk_text = buffer[:boundary].strip()
                     buffer = buffer[boundary:]
 
                     if chunk_text:
-                        token_msg = {
-                            "type": "text",
-                            "token": chunk_text,
-                            "last": False,
-                        }
-                        await websocket.send(json.dumps(token_msg))
+                        token_msg = {"type": "text", "token": chunk_text, "last": False}
+                        await websocket.send_text(json.dumps(token_msg))
                         full_response += chunk_text + " "
 
         # Send remaining buffer as final token
         if buffer.strip():
-            token_msg = {
-                "type": "text",
-                "token": buffer.strip(),
-                "last": True,
-            }
-            await websocket.send(json.dumps(token_msg))
+            token_msg = {"type": "text", "token": buffer.strip(), "last": True}
+            await websocket.send_text(json.dumps(token_msg))
             full_response += buffer.strip()
         else:
-            # Send empty last token to signal end
-            token_msg = {
-                "type": "text",
-                "token": "",
-                "last": True,
-            }
-            await websocket.send(json.dumps(token_msg))
+            token_msg = {"type": "text", "token": "", "last": True}
+            await websocket.send_text(json.dumps(token_msg))
 
-        # Log performance metrics
         total_time = (time.time() - start_time) * 1000
         ttft_ms = ((first_token_time - start_time) * 1000) if first_token_time else 0
         logger.info(
@@ -350,7 +324,6 @@ async def process_and_respond(websocket, session_id, caller_number, user_text, l
             f"response='{full_response[:100]}...'"
         )
 
-        # Save assistant response to history
         history.append({"role": "model", "parts": [{"text": full_response.strip()}]})
 
     except Exception as e:
@@ -360,14 +333,12 @@ async def process_and_respond(websocket, session_id, caller_number, user_text, l
             "token": "I'm sorry, I'm having a brief technical moment. Could you repeat that?",
             "last": True,
         }
-        await websocket.send(json.dumps(error_msg))
+        await websocket.send_text(json.dumps(error_msg))
 
 
-async def handle_transfer(websocket, session_id):
+async def handle_transfer(websocket: WebSocket, session_id):
     """Handle call transfer to Ricardo."""
     logger.info(f"[{session_id}] Initiating transfer to Ricardo at {RICARDO_NUMBER}")
-
-    # Send handoff message
     handoff_msg = {
         "type": "end",
         "handoffData": json.dumps({
@@ -376,28 +347,29 @@ async def handle_transfer(websocket, session_id):
             "transferTo": RICARDO_NUMBER,
         }),
     }
-    await websocket.send(json.dumps(handoff_msg))
+    await websocket.send_text(json.dumps(handoff_msg))
 
 
 # ---------------------------------------------------------------------------
-# Flask App (HTTP endpoints for TwiML + health)
+# HTTP Route Handlers
 # ---------------------------------------------------------------------------
-app = Flask(__name__)
-
-
-@app.route("/voice/incoming", methods=["POST"])
-def voice_incoming():
+async def voice_incoming(request: Request):
     """Handle incoming voice calls — return TwiML to connect to ConversationRelay."""
-    caller = request.form.get("From", "unknown")
-    called = request.form.get("To", "unknown")
+    form = await request.form()
+    caller = form.get("From", "unknown")
+    called = form.get("To", "unknown")
 
     logger.info(f"Incoming call from {caller} to {called}")
 
-    # Use the public WebSocket URL (exposed on separate port)
-    ws_url = os.environ.get(
-        "PUBLIC_WS_URL",
-        "wss://8765-iiofxjdu6h4bgscvnvkp2-0b9e1545.us2.manus.computer"
-    )
+    # Build WebSocket URL from the same host (single-port architecture)
+    if PUBLIC_URL:
+        base_url = PUBLIC_URL
+    else:
+        host = request.headers.get("host", "localhost")
+        proto = "wss" if request.headers.get("x-forwarded-proto") == "https" else "ws"
+        base_url = f"{proto}://{host}"
+
+    ws_url = f"{base_url}/ws"
 
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -451,67 +423,33 @@ def voice_incoming():
 </Response>"""
 
     logger.info(f"Returning ConversationRelay TwiML for call from {caller}")
-    return Response(twiml.strip(), content_type="text/xml")
+    return Response(twiml.strip(), media_type="text/xml")
 
 
-@app.route("/voice/status", methods=["POST"])
-def voice_status():
+async def voice_status(request: Request):
     """Handle call status callbacks."""
-    call_sid = request.form.get("CallSid", "unknown")
-    call_status = request.form.get("CallStatus", "unknown")
+    form = await request.form()
+    call_sid = form.get("CallSid", "unknown")
+    call_status = form.get("CallStatus", "unknown")
     logger.info(f"Call status update: {call_sid} -> {call_status}")
-    return "", 204
+    return Response("", status_code=204)
 
 
-@app.route("/health", methods=["GET"])
-def health():
-    return {
-        "status": "ok",
-        "agent": "Marcela Voice AI",
-        "org": "Norfolk AI",
-        "model": GEMINI_MODEL,
-        "architecture": {
-            "stt": "Deepgram nova-3-general (via ConversationRelay)",
-            "llm": "Gemini 2.5 Flash (streaming)",
-            "tts": "ElevenLabs Flash 2.5 (via ConversationRelay)",
-        },
-        "voice": VOICE_CONFIG,
-        "multilingual": ["en-US", "pt-BR", "es-ES", "it-IT", "multi"],
-        "phone": VOICE_NUMBER,
-        "ws_port": WS_PORT,
-        "powered_by": "Norfolk AI",
-    }
-
-
-@app.route("/", methods=["GET"])
-def index():
-    return {
-        "message": "Marcela — Norfolk AI Voice AI Agent",
-        "status": "running",
-        "phone": VOICE_NUMBER,
-        "powered_by": "Norfolk AI",
-    }
-
-
-# Also handle the WhatsApp webhook (preserve existing functionality)
-@app.route("/webhook", methods=["POST"])
-def whatsapp_webhook():
-    """Handle incoming WhatsApp messages (existing Marcela WhatsApp functionality)."""
-    import xml.sax.saxutils as saxutils
-
-    sender = request.form.get("From", "")
-    body = request.form.get("Body", "").strip()
-    profile_name = request.form.get("ProfileName", "Unknown")
+async def whatsapp_webhook(request: Request):
+    """Handle incoming WhatsApp messages."""
+    form = await request.form()
+    sender = form.get("From", "")
+    body = str(form.get("Body", "")).strip()
+    profile_name = form.get("ProfileName", "Unknown")
 
     logger.info(f"WhatsApp message from {sender} ({profile_name}): {body[:100]}")
 
     if not body:
         return Response(
             '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
-            content_type="text/xml",
+            media_type="text/xml",
         )
 
-    # Get AI response via Gemini
     conversation_id = f"whatsapp:{sender}"
     history = conversation_history[conversation_id]
     history.append({"role": "user", "parts": [{"text": body}]})
@@ -538,44 +476,66 @@ def whatsapp_webhook():
 
     escaped = saxutils.escape(assistant_text)
     twiml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Message>{escaped}</Message></Response>'
-    return Response(twiml, content_type="text/xml")
+    return Response(twiml, media_type="text/xml")
+
+
+async def health(request: Request):
+    return JSONResponse({
+        "status": "ok",
+        "agent": "Marcela Voice AI",
+        "org": "Norfolk AI",
+        "model": GEMINI_MODEL,
+        "architecture": {
+            "stt": "Deepgram nova-3-general (via ConversationRelay)",
+            "llm": "Gemini 2.5 Flash (streaming)",
+            "tts": "ElevenLabs Flash 2.5 (via ConversationRelay)",
+        },
+        "voice": VOICE_CONFIG,
+        "multilingual": ["en-US", "pt-BR", "es-ES", "it-IT", "multi"],
+        "phone": VOICE_NUMBER,
+        "port": PORT,
+        "powered_by": "Norfolk AI",
+    })
+
+
+async def index(request: Request):
+    return JSONResponse({
+        "message": "Marcela — Norfolk AI Voice AI Agent",
+        "status": "running",
+        "phone": VOICE_NUMBER,
+        "powered_by": "Norfolk AI",
+    })
 
 
 # ---------------------------------------------------------------------------
-# WebSocket + HTTP Server Runner
+# Starlette App — single port serves HTTP + WebSocket
 # ---------------------------------------------------------------------------
-async def run_websocket_server():
-    """Run the WebSocket server for ConversationRelay."""
-    logger.info(f"Starting WebSocket server on port {WS_PORT}...")
-    async with websockets.serve(
-        handle_websocket,
-        "0.0.0.0",
-        WS_PORT,
-        ping_interval=20,
-        ping_timeout=60,
-        max_size=2**20,  # 1MB max message size
-    ):
-        logger.info(f"WebSocket server running on ws://0.0.0.0:{WS_PORT}")
-        await asyncio.Future()  # Run forever
+app = Starlette(
+    routes=[
+        Route("/", index, methods=["GET"]),
+        Route("/health", health, methods=["GET"]),
+        Route("/voice/incoming", voice_incoming, methods=["POST"]),
+        Route("/voice/status", voice_status, methods=["POST"]),
+        Route("/webhook", whatsapp_webhook, methods=["POST"]),
+        WebSocketRoute("/ws", websocket_handler),
+    ],
+)
 
-
-def run_flask():
-    """Run the Flask HTTP server."""
-    logger.info(f"Starting Flask HTTP server on port {HTTP_PORT}...")
-    app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, use_reloader=False)
-
-
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    import threading
-
     logger.info("=" * 60)
     logger.info("  Marcela Voice AI Agent — Norfolk AI")
+    logger.info(f"  Serving HTTP + WebSocket on port {PORT}")
     logger.info("  Powered by Gemini 2.5 Flash + ConversationRelay")
     logger.info("=" * 60)
 
-    # Start Flask in a thread
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-
-    # Run WebSocket server in the main async loop
-    asyncio.run(run_websocket_server())
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=PORT,
+        log_level="info",
+        ws_ping_interval=20,
+        ws_ping_timeout=60,
+    )
