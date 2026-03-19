@@ -1,0 +1,33 @@
+{
+  "marcela_personal_assistant": {
+    "agent_id": "agent_5401km3m8hfrer5rmpetb7wefdyt",
+    "name": "Marcela by Manus",
+    "platform": "ElevenLabs Conversational AI",
+    "llm": "gemini-2.5-flash",
+    "voice_id": "g6xIsTj2HwM6VR4iXFCw",
+    "voice_name": "Jessica Anne Bogart - Conversations",
+    "twilio_webhook_url": "https://api.elevenlabs.io/v1/convai/twilio/inbound_call?agent_id=agent_5401km3m8hfrer5rmpetb7wefdyt",
+    "phone_number": "+19109944861",
+    "languages": [
+      "en",
+      "pt-BR",
+      "es",
+      "it",
+      "auto-detect"
+    ],
+    "capabilities": [
+      "Call filtering and screening",
+      "Transfer to Ricardo at +15126699705",
+      "WhatsApp referral to +15559178507",
+      "Meeting booking",
+      "Norfolk AI knowledge base",
+      "Super Conversations expertise",
+      "Multilingual auto-detection"
+    ]
+  },
+  "marcela_hospitality": {
+    "agent_id": "agent_6401kk0capntfansmn84f58yfrd9",
+    "name": "NAI Marcela Hospitality RC",
+    "purpose": "Financial modeling for boutique hotel investments (separate agent, kept)"
+  }
+}
