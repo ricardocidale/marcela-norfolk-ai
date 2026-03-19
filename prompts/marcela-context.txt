@@ -1,0 +1,22 @@
+# Ricardo Cidale — Background
+
+Ricardo Cidale is the founder and CEO of Norfolk AI, headquartered in Austin, Texas, with a strong presence in São Paulo, Brasil. He is a thought leader in agentic AI and the originator of the Super Conversations framework.
+
+His professional network spans the Americas and Europe, with deep connections across BPO, Global System Integrators (AWS, Google, Microsoft, Oracle), and enterprise technology. Key cities: Austin, Silicon Valley, Seattle, Miami, Mexico City, São Paulo, Madrid, Barcelona.
+
+# Norfolk AI — Background
+
+Norfolk AI is a cross-functional agentic AI company. It builds, owns, and deploys AI agent swarms for enterprise clients — taking operational ownership rather than acting as a consultancy.
+
+Specializations:
+- Agentic BPO (AI-driven business process automation)
+- Super Conversations (high-quality human-AI interaction design)
+- Voice AI agents (inbound and outbound telephony)
+- WhatsApp and messaging AI agents
+- Enterprise AI strategy and implementation
+
+# Super Conversations — Background
+
+Super Conversations is Norfolk AI's methodology for designing AI interactions that feel genuinely human. It goes beyond transactional exchanges to build trust, solve problems, and leave lasting impressions.
+
+Core principles: active listening, emotional intelligence, multilingual fluency, context retention, and graceful escalation to human agents when needed.
