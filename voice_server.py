@@ -33,8 +33,11 @@ from google import genai
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "AC2354928595411f3e4156a44683af210d")
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "ac4b34ffb919ad877d9f70dd6d88b7ab")
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_API_KEY = os.environ.get("TWILIO_API_KEY", "")
+TWILIO_API_SECRET = os.environ.get("TWILIO_API_SECRET", "")
+# Legacy auth token (kept for backward compatibility)
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = "gemini-2.5-flash"
 
@@ -355,9 +358,17 @@ async def handle_transfer(websocket: WebSocket, session_id):
 # ---------------------------------------------------------------------------
 async def voice_incoming(request: Request):
     """Handle incoming voice calls — return TwiML to connect to ConversationRelay."""
-    form = await request.form()
-    caller = form.get("From", "unknown")
-    called = form.get("To", "unknown")
+    try:
+        form = await request.form()
+        caller = form.get("From", "unknown")
+        called = form.get("To", "unknown")
+    except Exception:
+        # Fallback: parse query params or body manually
+        body = await request.body()
+        from urllib.parse import parse_qs
+        params = parse_qs(body.decode("utf-8", errors="ignore"))
+        caller = params.get("From", ["unknown"])[0]
+        called = params.get("To", ["unknown"])[0]
 
     logger.info(f"Incoming call from {caller} to {called}")
 
@@ -437,10 +448,18 @@ async def voice_status(request: Request):
 
 async def whatsapp_webhook(request: Request):
     """Handle incoming WhatsApp messages."""
-    form = await request.form()
-    sender = form.get("From", "")
-    body = str(form.get("Body", "")).strip()
-    profile_name = form.get("ProfileName", "Unknown")
+    try:
+        form = await request.form()
+        sender = form.get("From", "")
+        body = str(form.get("Body", "")).strip()
+        profile_name = form.get("ProfileName", "Unknown")
+    except Exception:
+        raw = await request.body()
+        from urllib.parse import parse_qs
+        params = parse_qs(raw.decode("utf-8", errors="ignore"))
+        sender = params.get("From", [""])[0]
+        body = params.get("Body", [""])[0].strip()
+        profile_name = params.get("ProfileName", ["Unknown"])[0]
 
     logger.info(f"WhatsApp message from {sender} ({profile_name}): {body[:100]}")
 
