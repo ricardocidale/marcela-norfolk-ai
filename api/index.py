@@ -17,8 +17,8 @@ import requests as http_requests
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "AC2354928595411f3e4156a44683af210d")
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "ac4b34ffb919ad877d9f70dd6d88b7ab")
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
 WHATSAPP_SENDER = os.environ.get("WHATSAPP_SENDER", "whatsapp:+15559178507")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")

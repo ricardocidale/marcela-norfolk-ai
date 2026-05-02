@@ -178,3 +178,5 @@ update_*.py
 voice_selection.md
 ws_protocol.md
 *.log
+.vercel
+.env*.local

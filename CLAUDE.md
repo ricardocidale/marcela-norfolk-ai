@@ -5,7 +5,7 @@
 Marcela is Ricardo Cidale's personal AI assistant, built for Norfolk AI. She operates across two channels: **voice calls** (inbound phone) and **WhatsApp messaging**. The project has gone through multiple architectural iterations, platform migrations, and debugging cycles documented below.
 
 **Owner**: Ricardo Cidale, Founder & CEO of Norfolk AI (Austin, TX)
-**Repository**: `ricardocidale/marcela-norfolk-ai` (private)
+**Repository**: `Norfolk-Group/marcela-norfolk-ai` (private)
 
 ---
 
@@ -24,7 +24,7 @@ Marcela is Ricardo Cidale's personal AI assistant, built for Norfolk AI. She ope
 
 | Number | Purpose | Status |
 |---|---|---|
-| +15559178507 | Marcela WhatsApp (messaging) | **BLOCKED — Error 63112** (see Critical Issues) |
+| +15559178507 | Marcela WhatsApp (messaging) | **ACTIVE — Connected, High quality** |
 | +19109944861 | Marcela Voice AI (inbound calls) + Norfolk AI Voice Digest | Voice Digest sender is Offline |
 | +15126699705 | Ricardo's personal number | Active |
 
@@ -40,30 +40,28 @@ Marcela is Ricardo Cidale's personal AI assistant, built for Norfolk AI. She ope
 
 ## Critical Issues (Current)
 
-### WhatsApp Error 63112 — Meta/WABA Disabled
+### ~~WhatsApp Error 63112~~ — RESOLVED (May 2, 2026)
 
-**Status**: UNRESOLVED as of March 2026
+**Status**: RESOLVED
 
-All outbound WhatsApp messages from Marcela fail with **Twilio Error 63112**:
+Marcela is now fully operational. The root causes were:
 
-> "The Meta and/or WhatsApp Business Accounts connected to this Sender were disabled by Meta or your business verification request is currently pending."
+1. **Wrong webhook URL**: The WhatsApp sender `+15559178507` had its webhook pointing to `https://passport-tracker-seven.vercel.app/api/whatsapp` (a completely different project). Fixed by updating to `https://marcela-norfolk-ai.vercel.app/webhook` in Twilio console > Messaging > Numbers and Senders > WhatsApp > +15559178507 > Messaging Endpoint Configuration.
 
-**Key findings from investigation (April 2026)**:
+2. **Vercel deployment crash (HTTP 500)**: The `requirements.txt` was rewritten for the voice server (Railway) and Flask was removed — but `api/index.py` imports Flask. This caused `FUNCTION_INVOCATION_FAILED` on every request. Fixed by restoring `flask` and `requests` as the only dependencies in `requirements.txt` (Vercel only needs these two).
 
-- The Vercel deployment and code are **working correctly** — webhook processes messages, Gemini generates responses, TwiML is returned properly
-- Inbound WhatsApp messages ARE received successfully (status: "received")
-- Every outbound message fails with error 63112, direction "outbound-api"
-- The WhatsApp sender `+15559178507` shows as **Online** with **High** quality rating in Twilio console
-- However, **Messaging limits: Unavailable** on the WABA (ID: 446936301829143)
-- This is a **Meta/Facebook-side block**, not a code or Twilio issue
+3. **Stale Twilio auth token**: The hardcoded fallback auth token `ac4b34ff...` in `api/index.py` was rotated/expired. Fixed by removing all hardcoded credential fallbacks and updating `TWILIO_AUTH_TOKEN` in Vercel environment variables.
 
-**To resolve**: Ricardo must log into Meta Business Suite (business.facebook.com), navigate to Business Settings > WhatsApp Accounts, check the WABA status, and complete business verification or submit an appeal if the account was disabled.
+4. **Vercel-GitHub auto-deploy broken**: The Vercel GitHub App lost access to the Norfolk-Group organization after the repo was transferred. Fixed by adding a GitHub Actions workflow (`.github/workflows/deploy.yml`) that deploys to Vercel via CLI token on every push. **Action required**: Add `VERCEL_TOKEN` as a GitHub secret in the Norfolk-Group/marcela-norfolk-ai repo settings.
 
-**This cannot be fixed with code changes.** Multiple code-level attempts were already made (see Failed Attempts below).
+**Investigation findings (May 2, 2026)**:
+- Meta Business Suite shows WABA (446936301829143) as **Approved** with **Verified** business — Meta was NOT blocking anything
+- Phone number `+15559178507` shows **Connected** with **High** quality rating in Meta
+- The real issue was the wrong webhook URL, not a Meta/WABA block as previously diagnosed
 
 ### Norfolk AI Voice Digest Sender Offline
 
-The second WhatsApp sender `+19109944861` (Norfolk AI Voice Digest) shows **Offline** status in Twilio with **Unknown** quality rating. This number is also the voice line.
+The second WhatsApp sender `+19109944861` (Norfolk AI Voice Digest) shows **Offline** status in Twilio with **Unknown** quality rating and **Unverified** in Meta. This number is also the voice line. Needs Meta WhatsApp verification.
 
 ---
 
@@ -271,10 +269,11 @@ The most effective workflow: write prompt → create simulation tests → run �
 
 ## Pending Work
 
-- **CRITICAL**: Resolve Meta/WABA error 63112 — requires action in Meta Business Suite (business.facebook.com > Business Settings > WhatsApp Accounts)
+- ~~Resolve Meta/WABA error 63112~~ — RESOLVED May 2, 2026
+- **Add `VERCEL_TOKEN` GitHub secret** to Norfolk-Group/marcela-norfolk-ai repo for auto-deploy workflow to work
+- Verify `+19109944861` in Meta WhatsApp Business to bring Norfolk AI Voice Digest sender online
 - Google Calendar OAuth reconnection (3 accounts — Ricardo must do manually)
 - Clean up the empty messaging service `MG21f0694cd1b2566a13873571d2106728`
-- Bring Norfolk AI Voice Digest sender (`+19109944861`) back online
 - Known-numbers spreadsheet (Google Drive)
 - Widget deployment to norfolk.ai
 - Final end-to-end verification via actual phone call
@@ -284,7 +283,9 @@ The most effective workflow: write prompt → create simulation tests → run �
 
 ## Common Pitfalls (for Future Agents)
 
-1. **Do NOT try to fix error 63112 with code changes.** It is a Meta/WABA-level block. The WhatsApp Business Account must be unblocked in Meta Business Suite.
+1. **ALWAYS check the Twilio webhook URL first** when Marcela stops responding. The most common failure mode is the webhook URL being overwritten or pointing to the wrong project. Go to Twilio > Messaging > Numbers and Senders > WhatsApp > +15559178507 > Messaging Endpoint Configuration and verify it points to `https://marcela-norfolk-ai.vercel.app/webhook`.
+
+1b. **Error 63112 may be a red herring.** In May 2026, error 63112 appeared in logs but the actual issue was a wrong webhook URL + broken Vercel deployment. Always check the webhook URL and Vercel health endpoint BEFORE investigating Meta/WABA.
 
 2. **Do NOT use Twilio or Anthropic Python SDKs on Vercel.** They cause dependency conflicts. Use direct HTTP requests.
 
@@ -298,7 +299,33 @@ The most effective workflow: write prompt → create simulation tests → run �
 
 7. **The `send_whatsapp_message()` function in server.py is dead code.** The webhook now uses TwiML responses. The function remains for potential future use but is not called.
 
+9. **`requirements.txt` at the root is used by Vercel.** It must contain ONLY `flask` and `requests`. Voice server dependencies go in `requirements-voice.txt` (used by Dockerfile). Never merge them — the Twilio SDK and Starlette break Vercel.
+
+10. **Vercel auto-deploy requires a GitHub secret.** The `.github/workflows/deploy.yml` workflow deploys on push but needs `VERCEL_TOKEN` set as a GitHub Actions secret in the repo settings. Without it, pushes won't deploy.
+
 8. **Conversation history is in-memory and resets on cold start.** This is acceptable for Vercel (stateless) and Railway (infrequent restarts) but means conversations do not persist across deployments.
+
+---
+
+## Hardening Measures (Added May 2, 2026)
+
+- **Health monitoring**: `scripts/health_monitor.py` runs hourly via Manus scheduler. Pings `/health` endpoint and sends WhatsApp alert to Ricardo (+15126699705) if Marcela is down.
+- **No hardcoded credentials**: All credential fallbacks removed from `api/index.py`. Credentials live only in Vercel environment variables.
+- **GitHub Actions auto-deploy**: `.github/workflows/deploy.yml` deploys to Vercel on every push to master/main. Requires `VERCEL_TOKEN` GitHub secret.
+- **CE Compound Engineering skills**: 38 skills + 49 agents installed in `skills/compound-engineering/` from EveryInc/compound-engineering-plugin.
+- **Separate requirements files**: `requirements.txt` (Vercel — flask + requests only) and `requirements-voice.txt` (Railway — full voice stack).
+
+---
+
+## CE Compound Engineering Skills
+
+Installed from [EveryInc/compound-engineering-plugin](https://github.com/EveryInc/compound-engineering-plugin) into `skills/compound-engineering/`.
+
+**38 skills** including: `ce-plan`, `ce-work`, `ce-compound`, `ce-code-review`, `ce-debug`, `ce-commit`, `ce-ideate`, `ce-brainstorm`, `ce-optimize`, `ce-simplify-code`, `ce-setup`, `ce-sessions`, `ce-update`, `ce-proof`, `ce-strategy`, and more.
+
+**49 agents** including adversarial reviewers, architecture strategist, API contract reviewer, correctness reviewer, deployment verification agent, and more.
+
+The CE workflow: **Plan → Work → Review → Commit** — agents learn from every session so code quality compounds over time.
 
 ---
 
