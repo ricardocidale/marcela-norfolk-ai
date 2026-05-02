@@ -315,9 +315,93 @@ def health():
     return {"status": "ok", "agent": "Marcela", "org": "Norfolk AI", "model": "Gemini 2.5 Flash"}
 
 
+# ── OpenGraph / Landing Page ────────────────────────────────────────────────
+OG_IMAGE_URL = "https://files.manuscdn.com/user_upload_by_module/session_file/310519663270229297/nyKxwDWrwYktNpct.png"
+APP_URL = "https://marcela-norfolk-ai.vercel.app"
+
+OG_HTML = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Marcela — Norfolk AI WhatsApp Assistant</title>
+
+  <!-- Primary Meta -->
+  <meta name="description" content="Marcela is your intelligent AI assistant from Norfolk AI, available 24/7 on WhatsApp. Powered by Gemini 2.5 Flash." />
+
+  <!-- OpenGraph (Facebook, WhatsApp, LinkedIn) -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="{APP_URL}" />
+  <meta property="og:title" content="Marcela — Norfolk AI WhatsApp Assistant" />
+  <meta property="og:description" content="Your intelligent AI assistant from Norfolk AI, available 24/7 on WhatsApp. Powered by Gemini 2.5 Flash." />
+  <meta property="og:image" content="{OG_IMAGE_URL}" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Marcela AI Assistant — Norfolk AI" />
+  <meta property="og:site_name" content="Norfolk AI" />
+  <meta property="og:locale" content="en_US" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Marcela — Norfolk AI WhatsApp Assistant" />
+  <meta name="twitter:description" content="Your intelligent AI assistant from Norfolk AI, available 24/7 on WhatsApp." />
+  <meta name="twitter:image" content="{OG_IMAGE_URL}" />
+
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0a0e1e;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 2rem;
+    }}
+    .card {{
+      max-width: 520px;
+      text-align: center;
+    }}
+    img.avatar {{
+      width: 140px;
+      height: 140px;
+      border-radius: 50%;
+      border: 3px solid #4a6cf7;
+      margin-bottom: 1.5rem;
+      object-fit: cover;
+    }}
+    h1 {{ font-size: 2.4rem; font-weight: 700; color: #fff; margin-bottom: 0.4rem; }}
+    .subtitle {{ font-size: 1.1rem; color: #8ca3d4; margin-bottom: 1.2rem; }}
+    p {{ font-size: 1rem; color: #a0b0cc; line-height: 1.6; margin-bottom: 2rem; }}
+    .badge {{
+      display: inline-block;
+      background: #1a2340;
+      border: 1px solid #2a3a60;
+      border-radius: 999px;
+      padding: 0.4rem 1rem;
+      font-size: 0.85rem;
+      color: #6080c0;
+    }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <img class="avatar" src="{OG_IMAGE_URL}" alt="Marcela" />
+    <h1>Marcela</h1>
+    <div class="subtitle">AI Assistant &mdash; Norfolk AI</div>
+    <p>Your intelligent AI assistant, available 24/7 on WhatsApp.<br/>
+    Powered by Gemini 2.5 Flash.</p>
+    <span class="badge">Powered by Norfolk AI</span>
+  </div>
+</body>
+</html>
+"""
+
+
 @app.route("/", methods=["GET"])
 def index():
-    return {"message": "Marcela — Norfolk AI WhatsApp Assistant", "status": "running"}
+    return Response(OG_HTML, mimetype="text/html")
 
 
 if __name__ == "__main__":
