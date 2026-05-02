@@ -316,7 +316,7 @@ def health():
 
 
 # ── OpenGraph / Landing Page ────────────────────────────────────────────────
-OG_IMAGE_URL = "https://files.manuscdn.com/user_upload_by_module/session_file/310519663270229297/nyKxwDWrwYktNpct.png"
+OG_IMAGE_URL = "https://files.manuscdn.com/user_upload_by_module/session_file/310519663270229297/LdjKfsMhusgSwWlM.png"
 APP_URL = "https://marcela-norfolk-ai.vercel.app"
 
 OG_HTML = f"""<!DOCTYPE html>
