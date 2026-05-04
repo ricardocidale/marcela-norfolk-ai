@@ -334,3 +334,154 @@ The CE workflow: **Plan → Work → Review → Commit** — agents learn from e
 - **Pipecat AI Discord** (17k+ users): Largest open voice AI community
 - **Key insight**: Endpointing (turn detection) is the most-discussed optimization challenge across all platforms
 - **Platform comparison**: ElevenLabs most stable; VAPI most active dev community; Retell and Bland have more latency complaints
+
+---
+
+## Phase 9: Neon pgvector RAG + Persistent Memory + Mel Robbins Voice (May 4, 2026)
+
+**Commits**: `b6ed060`, `5399b27`, `3ece1f0`, `e7b1917`
+
+### What Was Built
+
+1. **Neon PostgreSQL + pgvector** wired into Marcela as the persistent data layer:
+   - `conversations` table: stores every message (user + assistant) per platform/user, survives cold starts
+   - `knowledge_base` table: 105 chunks from 6 Norfolk AI documents, embedded with Gemini `gemini-embedding-001` (3072 dims), indexed with HNSW via `halfvec` type (pgvector 0.8+)
+
+2. **RAG pipeline**: On every message, Marcela embeds the query, runs cosine similarity search against `knowledge_base`, and injects the top-3 relevant chunks into the system prompt as grounding context.
+
+3. **Persistent conversation memory**: Last 10 turns per user/platform are fetched from Neon and prepended to the Gemini context window, giving Marcela true cross-session memory.
+
+4. **Mel Robbins voice**: System prompt rewritten across all platforms (WhatsApp, Slack, Telegram) to reflect Mel Robbins' communication style — direct, warm, no-nonsense, action-oriented, uses "you" language, short punchy sentences, occasional wit, never preachy.
+
+5. **Telegram bot**: `@MarcelaNorfolkAI_bot` created and webhook registered at `https://marcela-norfolk-ai.vercel.app/webhook`.
+
+### Knowledge Base Documents (6 files, 105 chunks)
+
+| File | Description |
+|---|---|
+| `NorfolkAISolutionsOverview.docx` | Norfolk AI services, capabilities, and offerings |
+| `norfolk-ai-content.md` | Website content and messaging |
+| `KnowledgeBenefitsofAIAgents1.pdf` | Benefits of AI agents whitepaper |
+| `SuperConversationsKnowledgeBase2.pdf` | Super Conversations KB |
+| `WhatAreSuperConversations.pdf` | Super Conversations explainer |
+| `SuperConversationsastheFoundation....docx` | Super Conversations for business/sales/AI training |
+
+### Neon Database Schema
+
+```sql
+-- pgvector extension
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- Conversation memory (persistent across cold starts)
+CREATE TABLE IF NOT EXISTS conversations (
+    id SERIAL PRIMARY KEY,
+    platform VARCHAR(20) NOT NULL,  -- 'whatsapp', 'slack', 'telegram'
+    user_id VARCHAR(255) NOT NULL,
+    role VARCHAR(10) NOT NULL,       -- 'user' or 'assistant'
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(platform, user_id, created_at DESC);
+
+-- Knowledge base with pgvector embeddings
+CREATE TABLE IF NOT EXISTS knowledge_base (
+    id SERIAL PRIMARY KEY,
+    source VARCHAR(255),
+    chunk_index INTEGER,
+    content TEXT NOT NULL,
+    embedding vector(3072),
+    embedding_half halfvec(3072),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_kb_hnsw ON knowledge_base USING hnsw (embedding_half halfvec_cosine_ops);
+```
+
+### RAG Architecture
+
+```
+User message
+    │
+    ▼
+Embed query (gemini-embedding-001, 3072 dims)
+    │
+    ▼
+Cosine similarity search → knowledge_base (top 3 chunks)
+    │
+    ▼
+Fetch last 10 turns → conversations table
+    │
+    ▼
+Build Gemini prompt:
+  [System: Mel Robbins voice + RAG context]
+  [History: last 10 turns]
+  [User: current message]
+    │
+    ▼
+Gemini 2.5 Flash response
+    │
+    ▼
+Save to conversations table
+    │
+    ▼
+Send reply (WhatsApp TwiML / Slack API / Telegram API)
+```
+
+### Critical Lessons Learned (May 4, 2026)
+
+1. **`api/requirements.txt` is what Vercel uses, NOT root `requirements.txt`**. The `@vercel/python` builder looks for `requirements.txt` in the same directory as the function file (`api/`). The root `requirements.txt` is ignored. **Always update `api/requirements.txt` for Vercel dependencies.**
+
+2. **pgvector HNSW index has a 2000-dimension limit**. For 3072-dim embeddings (Gemini), use `halfvec` type + HNSW: `CREATE INDEX ... USING hnsw (embedding_half halfvec_cosine_ops)`. The `halfvec` type supports up to 4000 dims.
+
+3. **Neon pooler SSL EOF on bulk inserts**. The Neon connection pooler (PgBouncer) drops connections after ~30s idle or on large transactions. Fix: insert rows one at a time with reconnect logic between batches.
+
+4. **Vercel build caching**: Vercel caches the pip install layer. A 7-second build means it's using cache. To force a full rebuild, change both `api/requirements.txt` AND `api/index.py` in the same commit.
+
+5. **`channel_binding=require` in Neon URL**: Both psycopg2 connection modes (with and without `channel_binding=require`) work fine from the sandbox. No issues with this parameter.
+
+6. **GitHub PAT scopes**: Fine-grained tokens with `push: true` in permissions still cannot push via `git push` over HTTPS — they lack OAuth scopes. Use a **classic PAT with `repo` scope** for git push operations.
+
+### Environment Variables Added (Vercel)
+
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | Neon PostgreSQL connection string (pooler endpoint, sslmode=require) |
+| `GITHUB_TOKEN` | GitHub PAT for any future GitHub API operations from functions |
+
+### Telegram Bot
+
+| Item | Value |
+|---|---|
+| Bot username | `@MarcelaNorfolkAI_bot` |
+| Bot URL | `t.me/MarcelaNorfolkAI_bot` |
+| Webhook | `https://marcela-norfolk-ai.vercel.app/webhook` |
+| Token env var | `TELEGRAM_BOT_TOKEN` (needs to be added to Vercel) |
+
+**Note**: `TELEGRAM_BOT_TOKEN` still needs to be added to Vercel env vars for Telegram to work end-to-end.
+
+---
+
+## Updated Architecture Summary (May 4, 2026)
+
+| Component | Technology | Deployment |
+|---|---|---|
+| WhatsApp Agent | Flask + Gemini 2.5 Flash + Neon RAG | Vercel Serverless (`api/index.py`) |
+| Slack Agent | Flask + Gemini 2.5 Flash + Neon RAG | Vercel Serverless (`api/index.py`) |
+| Telegram Agent | Flask + Gemini 2.5 Flash + Neon RAG | Vercel Serverless (`api/index.py`) |
+| Voice Agent | Starlette + Gemini 2.5 Flash (streaming) + ConversationRelay | Railway (Docker container) |
+| Persistent Memory | Neon PostgreSQL (`conversations` table) | Neon serverless |
+| Knowledge Base | Neon pgvector (`knowledge_base` table, 105 chunks) | Neon serverless |
+| Embeddings | Gemini `gemini-embedding-001` (3072 dims) | Google AI API |
+| STT | Deepgram nova-3-general | Via Twilio ConversationRelay |
+| TTS | ElevenLabs Flash 2.5 | Via Twilio ConversationRelay |
+| LLM | Google Gemini 2.5 Flash | Direct API |
+| Telephony | Twilio | WhatsApp Messaging + Voice ConversationRelay |
+
+---
+
+## Updated Common Pitfalls
+
+9b. **`api/requirements.txt` is the Vercel requirements file, NOT root `requirements.txt`.** Always add new Python packages to `api/requirements.txt`. The root file is a legacy artifact.
+
+9c. **pgvector HNSW index fails for >2000 dims.** Use `halfvec` column + `halfvec_cosine_ops` for Gemini embeddings (3072 dims).
+
+9d. **Neon pooler drops connections on bulk operations.** Insert rows one at a time with reconnect logic. Do not use `executemany()` with large batches.
