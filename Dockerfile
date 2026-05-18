@@ -6,7 +6,6 @@ COPY requirements-voice.txt .
 RUN pip install --no-cache-dir -r requirements-voice.txt
 
 COPY voice_server.py .
-COPY server.py .
 
 EXPOSE 8080
 

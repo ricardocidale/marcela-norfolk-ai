@@ -69,8 +69,7 @@ The second WhatsApp sender `+19109944861` (Norfolk AI Voice Digest) shows **Offl
 
 | File | Description |
 |---|---|
-| `server.py` | WhatsApp-only Flask server (Gemini via direct HTTP, no SDK) |
-| `api/index.py` | Vercel serverless entry point — mirrors `server.py` for Vercel deployment |
+| `api/index.py` | Vercel serverless entry point — Flask app handling WhatsApp, Slack, and Telegram with Neon RAG |
 | `voice_server.py` | Voice + WhatsApp Starlette server (Gemini via google-genai SDK, streaming) |
 | `create_elevenlabs_agent.py` | Script to create ElevenLabs ConvAI agent via API (historical) |
 | `marcela_agent_config.json` | Agent metadata: IDs, phone numbers, capabilities |
@@ -296,8 +295,6 @@ The most effective workflow: write prompt → create simulation tests → run �
 5. **Do NOT assume TwiML bypasses Twilio API restrictions.** Twilio processes TwiML and sends messages via its internal API — the same restrictions apply.
 
 6. **Do NOT skip early data collection in voice prompts.** Without explicit timing instructions, the LLM forgets to collect caller name/email.
-
-7. **The `send_whatsapp_message()` function in server.py is dead code.** The webhook now uses TwiML responses. The function remains for potential future use but is not called.
 
 9. **`requirements.txt` at the root is used by Vercel.** It must contain ONLY `flask` and `requests`. Voice server dependencies go in `requirements-voice.txt` (used by Dockerfile). Never merge them — the Twilio SDK and Starlette break Vercel.
 
